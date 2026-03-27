@@ -1,65 +1,112 @@
 import { NextResponse } from "next/server";
-import { ogChat } from "@/lib/opengradient";
+import { privateKeyToAccount } from "viem/accounts";
+
+export const maxDuration = 60;
 
 export async function GET() {
-  console.log("=".repeat(60));
-  console.log("OpenGradient x402 Smoke Test — Phase 1");
-  console.log("=".repeat(60));
+  const steps: Record<string, unknown> = {};
 
   try {
-    console.log("\n[1] Making x402 chat call...");
-    console.log("    model    = anthropic/claude-opus-4-6");
-    console.log("    mode     = individual (INDIVIDUAL_FULL)");
-
-    const result = await ogChat({
-      model: "anthropic/claude-opus-4-6",
-      messages: [
-        { role: "system", content: "You are a helpful assistant. Reply concisely." },
-        { role: "user", content: 'Respond with exactly this JSON and nothing else: {"status": "ok", "phase": 1}' },
-      ],
-      temperature: 0.0,
-      max_tokens: 50,
-      settlement_type: "individual",
-    });
-
-    console.log("\n[2] Result received. Full response dump:");
-    console.log("-".repeat(40));
-    console.log(JSON.stringify(result._raw, null, 2));
-
-    console.log("\n[3] Response headers (payment proof):");
-    console.log("-".repeat(40));
-    for (const [key, value] of Object.entries(result._headers)) {
-      console.log(`  ${key}: ${value}`);
-      if (key.toLowerCase().includes("payment") || key.toLowerCase().includes("x-")) {
-        console.log(`  ^ IMPORTANT — potential verification proof header`);
-      }
+    // Step 1: Check env var
+    const key = process.env.OG_PRIVATE_KEY;
+    steps["1_env_check"] = {
+      has_key: !!key,
+      key_prefix: key ? key.substring(0, 6) + "..." : "MISSING",
+    };
+    if (!key) {
+      return NextResponse.json({ success: false, steps, error: "OG_PRIVATE_KEY not set" }, { status: 500 });
     }
 
-    console.log("\n[4] LLM response content:");
-    const content = result.choices?.[0]?.message?.content;
-    console.log(`  content = ${JSON.stringify(content)}`);
-
-    console.log("\n[5] SUMMARY:");
-    console.log("  Check the response headers above for X-PAYMENT-RESPONSE");
-    console.log("  This contains the x402 payment receipt/proof");
-    console.log("  Visit explorer.opengradient.ai to verify settlement");
-    console.log("\nSmoke test complete.");
-
-    return NextResponse.json({
-      success: true,
-      llm_response: content,
-      raw_response: result._raw,
-      headers: result._headers,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`\nERROR: ${message}`);
-
-    if (message.includes("402") || message.toLowerCase().includes("payment")) {
-      console.error("  Your testnet wallet needs OPG tokens.");
-      console.error("  Visit: https://faucet.opengradient.ai/");
+    // Step 2: Derive wallet address
+    let address: string;
+    try {
+      const account = privateKeyToAccount(key as `0x${string}`);
+      address = account.address;
+      steps["2_wallet"] = { address };
+    } catch (e) {
+      steps["2_wallet"] = { error: String(e) };
+      return NextResponse.json({ success: false, steps, error: "Invalid private key format" }, { status: 500 });
     }
 
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    // Step 3: Plain fetch to OpenGradient (no x402) — test connectivity
+    try {
+      const pingResp = await fetch("https://llm.opengradient.ai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "anthropic/claude-opus-4-6",
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 5,
+        }),
+      });
+      const pingStatus = pingResp.status;
+      const pingBody = await pingResp.text();
+      steps["3_plain_fetch"] = {
+        status: pingStatus,
+        body_preview: pingBody.substring(0, 500),
+      };
+    } catch (e) {
+      steps["3_plain_fetch"] = { error: String(e) };
+      return NextResponse.json({ success: false, steps, error: "Cannot reach OpenGradient API" }, { status: 500 });
+    }
+
+    // Step 4: x402 fetch
+    try {
+      const { wrapFetchWithPayment, x402Client } = await import("@x402/fetch");
+      const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
+
+      const account = privateKeyToAccount(key as `0x${string}`);
+      const client = new x402Client();
+      registerExactEvmScheme(client, {
+        signer: account,
+        networks: ["eip155:84532"],
+      });
+      const x402Fetch = wrapFetchWithPayment(fetch, client);
+
+      steps["4_x402_init"] = "ok";
+
+      const response = await x402Fetch("https://llm.opengradient.ai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-SETTLEMENT-TYPE": "individual",
+        },
+        body: JSON.stringify({
+          model: "anthropic/claude-opus-4-6",
+          messages: [
+            { role: "system", content: "Reply concisely." },
+            { role: "user", content: 'Respond with exactly: {"status":"ok"}' },
+          ],
+          temperature: 0.0,
+          max_tokens: 50,
+        }),
+      });
+
+      const respHeaders: Record<string, string> = {};
+      response.headers.forEach((v: string, k: string) => { respHeaders[k] = v; });
+
+      const data = await response.json();
+      steps["5_x402_response"] = {
+        status: response.status,
+        headers: respHeaders,
+        body: data,
+      };
+
+      return NextResponse.json({
+        success: true,
+        wallet_address: address,
+        llm_response: data?.choices?.[0]?.message?.content,
+        full_response: data,
+        response_headers: respHeaders,
+        steps,
+      });
+    } catch (e) {
+      const err = e instanceof Error ? { message: e.message, stack: e.stack?.split("\n").slice(0, 5) } : String(e);
+      steps["4_x402_error"] = err;
+      return NextResponse.json({ success: false, steps, error: String(e instanceof Error ? e.message : e) }, { status: 500 });
+    }
+  } catch (e) {
+    steps["unexpected"] = String(e);
+    return NextResponse.json({ success: false, steps, error: String(e) }, { status: 500 });
   }
 }
