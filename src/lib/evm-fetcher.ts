@@ -83,25 +83,153 @@ export async function fetchContractData(address: string, chain: SupportedChain):
 }
 
 export async function fetchHolderData(address: string, chain: SupportedChain): Promise<HolderData> {
-  // Getting real holder distribution requires indexing Transfer events which is
-  // very expensive on public RPCs. Return a placeholder that will be improved later.
-  return {
-    topHolders: [
-      { address: "0x...1", percentage: 15 },
-      { address: "0x...2", percentage: 10 },
-      { address: "0x...3", percentage: 8 },
-      { address: "0x...4", percentage: 5 },
-      { address: "0x...5", percentage: 3 },
-    ],
-    concentrationRisk: "medium",
-  };
+  const client = getClient(chain);
+  const addr = address as Address;
+
+  try {
+    const currentBlock = await client.getBlockNumber();
+    // Scan last 5000 blocks for Transfer events (balances are approximate)
+    const fromBlock = currentBlock > BigInt(5000) ? currentBlock - BigInt(5000) : BigInt(0);
+
+    const logs = await client.getLogs({
+      address: addr,
+      event: {
+        type: "event",
+        name: "Transfer",
+        inputs: [
+          { type: "address", name: "from", indexed: true },
+          { type: "address", name: "to", indexed: true },
+          { type: "uint256", name: "value", indexed: false },
+        ],
+      },
+      fromBlock,
+      toBlock: currentBlock,
+    });
+
+    // Aggregate net transfers per address
+    const balances = new Map<string, bigint>();
+    for (const log of logs) {
+      const from = (log.args as Record<string, unknown>).from as string;
+      const to = (log.args as Record<string, unknown>).to as string;
+      const value = (log.args as Record<string, unknown>).value as bigint;
+
+      if (from && from !== "0x0000000000000000000000000000000000000000") {
+        balances.set(from, (balances.get(from) || BigInt(0)) - value);
+      }
+      if (to && to !== "0x0000000000000000000000000000000000000000") {
+        balances.set(to, (balances.get(to) || BigInt(0)) + value);
+      }
+    }
+
+    // Get total supply for percentage calculation
+    let totalSupply = BigInt(0);
+    try {
+      totalSupply = await client.readContract({
+        address: addr,
+        abi: parseAbi(["function totalSupply() view returns (uint256)"]),
+        functionName: "totalSupply",
+      }) as bigint;
+    } catch {
+      // Sum positive balances as fallback
+      for (const bal of balances.values()) {
+        if (bal > BigInt(0)) totalSupply += bal;
+      }
+    }
+
+    // Sort by balance, take top holders
+    const sorted = [...balances.entries()]
+      .filter(([, bal]) => bal > BigInt(0))
+      .sort(([, a], [, b]) => (b > a ? 1 : b < a ? -1 : 0))
+      .slice(0, 10);
+
+    const topHolders = sorted.map(([holderAddr, bal]) => ({
+      address: holderAddr.slice(0, 6) + "..." + holderAddr.slice(-4),
+      percentage: totalSupply > BigInt(0) ? Number((bal * BigInt(10000)) / totalSupply) / 100 : 0,
+    }));
+
+    const top5Percent = topHolders.slice(0, 5).reduce((sum, h) => sum + h.percentage, 0);
+    const concentrationRisk: "low" | "medium" | "high" =
+      top5Percent > 60 ? "high" : top5Percent > 30 ? "medium" : "low";
+
+    return {
+      topHolders,
+      totalHolders: balances.size,
+      concentrationRisk,
+    };
+  } catch {
+    // Fallback if event scanning fails (some RPCs limit getLogs)
+    return {
+      topHolders: [],
+      concentrationRisk: "medium",
+    };
+  }
 }
 
+const UNISWAP_V2_FACTORY: Record<SupportedChain, Address> = {
+  ethereum: "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
+  base: "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6",
+  bsc: "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73",
+};
+
+const WRAPPED_NATIVE: Record<SupportedChain, Address> = {
+  ethereum: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+  base: "0x4200000000000000000000000000000000000006",
+  bsc: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
+};
+
 export async function fetchLiquidityData(address: string, chain: SupportedChain): Promise<LiquidityData> {
-  // Real implementation would query Uniswap V2/V3 factory for pair addresses
-  // and read reserves. Placeholder for now.
-  return {
-    hasLiquidity: true,
-    depth: "moderate",
-  };
+  const client = getClient(chain);
+  const tokenAddr = address as Address;
+  const factory = UNISWAP_V2_FACTORY[chain];
+  const wrappedNative = WRAPPED_NATIVE[chain];
+
+  try {
+    // Get pair address from factory
+    const pairAddress = await client.readContract({
+      address: factory,
+      abi: parseAbi(["function getPair(address, address) view returns (address)"]),
+      functionName: "getPair",
+      args: [tokenAddr, wrappedNative],
+    }) as Address;
+
+    const zeroPair = "0x0000000000000000000000000000000000000000";
+    if (!pairAddress || pairAddress === zeroPair) {
+      return { hasLiquidity: false, depth: "none" };
+    }
+
+    // Read reserves from pair
+    const reserves = await client.readContract({
+      address: pairAddress,
+      abi: parseAbi(["function getReserves() view returns (uint112, uint112, uint32)"]),
+      functionName: "getReserves",
+    }) as [bigint, bigint, number];
+
+    const [reserve0, reserve1] = reserves;
+
+    // Determine which reserve is the native token
+    const token0 = await client.readContract({
+      address: pairAddress,
+      abi: parseAbi(["function token0() view returns (address)"]),
+      functionName: "token0",
+    }) as Address;
+
+    const nativeReserve = token0.toLowerCase() === wrappedNative.toLowerCase() ? reserve0 : reserve1;
+
+    // Classify depth based on native token reserves (in wei)
+    // >100 ETH = deep, >10 ETH = moderate, >1 ETH = shallow
+    const ethValue = Number(nativeReserve) / 1e18;
+    let depth: "deep" | "moderate" | "shallow" | "none";
+    if (ethValue > 100) depth = "deep";
+    else if (ethValue > 10) depth = "moderate";
+    else if (ethValue > 0.1) depth = "shallow";
+    else depth = "none";
+
+    return {
+      hasLiquidity: true,
+      poolAddress: pairAddress,
+      depth,
+    };
+  } catch {
+    return { hasLiquidity: false, depth: "none" };
+  }
 }
