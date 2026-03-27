@@ -29,21 +29,21 @@ progress:
 
 ## Current Position
 
-Phase: 01 (sdk-foundation) — COMPLETE
-Plan: 1 of 1 (complete)
+Phase: 01 (sdk-foundation) — RE-EXECUTING (stack pivot)
+Plan: 0 of ? (replanning needed)
 **Phase:** 1 — SDK Foundation
-**Plan:** 01-01 complete
-**Status:** Phase 01 complete, ready for Phase 02
-**Overall progress:** 1/4 phases complete
+**Plan:** Replanning required after TypeScript pivot
+**Status:** Re-executing Phase 01 with TypeScript/Next.js stack
+**Overall progress:** 0/4 phases complete
 
 ```
-[Phase 1: SDK Foundation      ] [X]
+[Phase 1: SDK Foundation      ] [~] (re-executing — stack pivot)
 [Phase 2: Data and Input Layer] [ ]
 [Phase 3: Analysis Engine     ] [ ]
 [Phase 4: Frontend and API    ] [ ]
 ```
 
-Progress: 25% (1/4 phases)
+Progress: 0% (0/4 phases — reset after stack pivot)
 
 ---
 
@@ -72,6 +72,7 @@ Progress: 25% (1/4 phases)
 | og.LLM singleton in FastAPI lifespan | Init once at startup, not per-request; avoid repeated OPG approval calls | 01 |
 | ensure_opg_approval(100.0) at startup | 100 OPG covers ~100 inference calls without re-approval | 01 |
 | Private key excluded from Settings.__repr__ | Prevents accidental log exposure of wallet key | 01 |
+| Pivoted to TypeScript/Next.js | User has Node.js but not Python. Using x402 HTTP gateway instead of Python SDK. | 01 (reset) |
 
 ### Critical Facts to Remember
 
@@ -95,15 +96,15 @@ Progress: 25% (1/4 phases)
 
 ### Blockers
 
-- Python 3.12+ not installed on dev machine -- required for backend runtime and smoke test
+- None (Python blocker resolved by pivoting to TypeScript/Next.js)
 
 ---
 
 ## Session Continuity
 
-**To resume:** Read this file, read `.planning/ROADMAP.md`, then run `/gsd:plan-phase 2`
-**Last action:** Completed 01-01-PLAN.md (backend skeleton + smoke test script)
-**Next action:** Install Python 3.12+, run smoke test, then plan Phase 2
+**To resume:** Read this file, read `.planning/ROADMAP.md`, then run `/gsd:plan-phase 1`
+**Last action:** Pivoted stack from Python/FastAPI to TypeScript/Next.js. Deleted backend/, updated docs.
+**Next action:** Re-plan Phase 1 for TypeScript/Next.js stack
 
 ---
 

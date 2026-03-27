@@ -1,5 +1,0 @@
-opengradient==0.9.3
-fastapi==0.135.2
-uvicorn[standard]
-httpx==0.28.1
-pydantic-settings==2.13.1

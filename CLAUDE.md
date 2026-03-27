@@ -9,7 +9,7 @@ A web-based tool that analyzes crypto tokens by contract address or ticker symbo
 
 ### Constraints
 
-- **Platform**: Must use OpenGradient SDK for all LLM inference — no direct API calls to OpenAI/Anthropic
+- **Platform**: Must use OpenGradient for all LLM inference (via x402 HTTP gateway) — no direct API calls to OpenAI/Anthropic
 - **Data**: On-chain data only — no external price APIs
 - **Payment**: x402 gateway with OPG tokens on Base Sepolia (testnet)
 - **Verification**: Individual Full settlement mode for complete on-chain audit trail
@@ -23,20 +23,20 @@ A web-based tool that analyzes crypto tokens by contract address or ticker symbo
 ### Core AI / Inference Layer
 | Technology | Version | Purpose | Why |
 |------------|---------|---------|-----|
-| `opengradient` | 0.9.3 | TEE-verified LLM inference, tool calling, x402 payment | The platform constraint — all inference must go through OpenGradient. Handles OPG token approval, settlement modes, and proof generation. No alternative. |
+| OpenGradient x402 HTTP gateway | — | TEE-verified LLM inference via HTTP + x402 payment protocol | All inference goes through OpenGradient. Using the x402 HTTP gateway instead of the Python SDK — compatible with TypeScript via `@x402/fetch`. |
 | `og.TEE_LLM.CLAUDE_OPUS_4_6` | — | Primary analysis model | Strongest reasoning among available models for multi-step token risk analysis. GPT-5 is viable fallback. Set `temperature=0.0` for deterministic, auditable output. |
-### Backend Framework
+### Backend Framework (Next.js API Routes)
 | Technology | Version | Purpose | Why |
 |------------|---------|---------|-----|
-| Python | 3.12 | Runtime | 3.12 is the production sweet spot — full async support, faster than 3.11, wider library compatibility than 3.13. The `opengradient` SDK requires ≥3.10. |
-| FastAPI | 0.135.2 | REST API + async server | Async-native framework that matches OpenGradient SDK's `asyncio.run()` pattern. Auto-generates OpenAPI docs. Handles concurrent on-chain RPC calls cleanly with `async def` routes. |
-| uvicorn | latest stable | ASGI server | Standard ASGI server for FastAPI. Single process for v1 (analysis is I/O-bound, not CPU-bound). Add gunicorn workers only if concurrency becomes a problem. |
-| pydantic-settings | 2.13.1 | Config / env var management | FastAPI's native config pattern. Validates `OG_PRIVATE_KEY`, RPC URLs, chain IDs at startup — fails fast before any user request if config is broken. |
-| httpx | 0.28.1 | Async HTTP client | Needed for any outbound HTTP calls (e.g., Solana RPC via JSON-RPC POST). Fully async, compatible with FastAPI's event loop. Do NOT use `requests` — it blocks the event loop. |
-### EVM On-Chain Data (Ethereum, Base, BSC)
+| Node.js | 22.x | Runtime | LTS version installed on dev machine. No Python available. |
+| Next.js API Routes | 16.2.1 | Backend API layer | App Router API routes (`app/api/`) serve as the backend. No separate server process needed — single deployment unit. |
+| `@x402/fetch` | latest | x402 payment-aware HTTP client | Wraps `fetch()` with automatic x402 payment header signing for OpenGradient inference calls. TypeScript-native. |
+| `@x402/evm` | latest | EVM wallet client for x402 signing | Creates the wallet client that `@x402/fetch` uses to sign OPG payment headers on Base Sepolia. |
+| `viem` | latest | EVM wallet and contract interaction | Lightweight TypeScript EVM library. Used both for x402 wallet client creation and for on-chain data reads (ERC-20 calls, contract inspection). Replaces web3.py. |
+### EVM On-Chain Data (Ethereum, Base, BSC) — TypeScript
 | Technology | Version | Purpose | Why |
 |------------|---------|---------|-----|
-| web3.py | 7.14.1 | EVM contract calls, event log scanning, token data | The dominant Python EVM library. v7.x is async-compatible. Handles ERC-20 ABI calls (`totalSupply`, `balanceOf`, `Transfer` event logs), reading LP pool reserves from Uniswap V2/V3 pairs, and contract bytecode fetching. |
+| `viem` | latest | EVM contract calls, event log scanning, token data | The modern TypeScript EVM library. Handles ERC-20 ABI calls (`totalSupply`, `balanceOf`, `Transfer` event logs), reading LP pool reserves from Uniswap V2/V3 pairs, and contract bytecode fetching. Replaces web3.py from the previous Python stack. |
 - Ethereum: `https://mainnet.infura.io/v3/{KEY}` or Alchemy endpoint
 - Base: `https://mainnet.base.org` (official, free, no key required)
 - BSC: `https://bsc-dataseed.binance.org/` (official, free, no key required)
@@ -45,11 +45,10 @@ A web-based tool that analyzes crypto tokens by contract address or ticker symbo
 - Top holder distribution: replay `Transfer` event logs, aggregate by address (resource-intensive — cap at last 10K blocks or use `getTokenLargestAccounts` equivalent pattern)
 - Liquidity: query Uniswap V2 pair `getReserves()` for the token/WETH pair
 - Transaction patterns: last N transactions to the contract via `eth_getLogs`
-### Solana On-Chain Data (SPL Tokens)
+### Solana On-Chain Data (SPL Tokens) — TypeScript
 | Technology | Version | Purpose | Why |
 |------------|---------|---------|-----|
-| solana | 0.36.11 | Solana JSON-RPC client, SPL token program interaction | The official Python Solana SDK. Provides `AsyncClient` for non-blocking RPC calls, SPL token account queries, and mint metadata. |
-| solders | 0.27.1 | Core types: Pubkey, Keypair, transaction primitives | solana-py is built on solders. Import `Pubkey` from solders for address validation. Solders handles Rust-native performance-sensitive operations. |
+| `@solana/web3.js` | latest | Solana JSON-RPC client, SPL token program interaction | The official TypeScript Solana SDK. Provides `Connection` for RPC calls, SPL token account queries, and mint metadata. Replaces solana-py from the previous Python stack. |
 - Mint account: `get_account_info(mint_address)` — supply, decimals, mint/freeze authorities
 - Top holders: `get_token_largest_accounts(mint)` — returns top 20 token accounts by balance (free, single RPC call)
 - Total supply: `get_token_supply(mint)` — combine with top-holder data to compute concentration ratios
@@ -65,44 +64,39 @@ A web-based tool that analyzes crypto tokens by contract address or ticker symbo
 ### Configuration and Environment
 | Technology | Version | Purpose | Why |
 |------------|---------|---------|-----|
-| pydantic-settings | 2.13.1 | Backend config management | Validates all env vars at startup with type safety. Reads `OG_PRIVATE_KEY`, `ETH_RPC_URL`, `BASE_RPC_URL`, `BSC_RPC_URL`, `SOL_RPC_URL`. |
-| python-dotenv | bundled with pydantic-settings | `.env` file loading | pydantic-settings includes dotenv support — no separate install needed. |
+| zod | latest | Env var validation | Type-safe environment variable validation at startup. Reads OG_PRIVATE_KEY, ETH_RPC_URL, BASE_RPC_URL, BSC_RPC_URL, SOL_RPC_URL. |
+| .env.local | N/A | Env file loading | Next.js built-in .env.local support, no separate dotenv package needed. |
 ## Alternatives Considered
 | Category | Recommended | Alternative | Why Not |
 |----------|-------------|-------------|---------|
-| Backend framework | FastAPI | Django REST Framework | Django is synchronous-first. OpenGradient SDK uses `asyncio.run()` — mixing sync Django with async inference would require `asgiref.sync.sync_to_async` wrappers everywhere. FastAPI is async-native. |
-| Backend framework | FastAPI | Flask | Flask lacks native async support (requires `flask[async]` extension). FastAPI is the obvious successor for new async Python APIs. |
-| EVM library | web3.py 7.x | ethers.py | `ethers.py` is a thin Python port with sparse documentation and no production track record. web3.py has 6+ years of production usage, full Ethereum Foundation support. |
-| Solana library | solana-py + solders | solathon | `solathon` has low adoption and is not maintained. solana-py is the official community SDK referenced in Solana docs. |
+| Backend framework | Next.js API Routes | Python/FastAPI | User has Node.js 22 but not Python. Separate backend adds deployment complexity. Next.js API routes provide a single TypeScript deployment unit. |
+| Backend framework | Next.js API Routes | Express.js | Extra dependency when Next.js API routes handle the same use case natively with zero config. |
+| EVM library | viem | ethers.js v6 | viem is lighter, tree-shakeable, and TypeScript-first. ethers.js v6 is viable but heavier. |
+| Solana library | @solana/web3.js | solana-py + solders | Python stack no longer applicable. @solana/web3.js is the official TypeScript SDK. |
 | Frontend | Next.js 16 | Pure Vite + React | No server-side rendering, no file-based routing, no built-in API proxy routes. Next.js handles all of this and is the dominant React framework. |
 | Frontend | Next.js 16 | SvelteKit | Smaller ecosystem, fewer component libraries that include shadcn/ui-equivalent. Team likely more familiar with React. |
 | Styling | Tailwind v4 + shadcn/ui | Material UI (MUI) | MUI ships heavy JS bundles and imposes Google Material design language. Tailwind + shadcn/ui produces lighter bundles and a more custom look appropriate for a crypto tool. |
 | LLM model (primary) | Claude Opus 4.6 | Gemini 3 Pro | Gemini 3 Pro is less tested for strict JSON schema adherence in tool-calling loops. Claude Opus 4.6 is more reliable for structured output with complex instructions. |
-| Config | pydantic-settings | python-decouple | pydantic-settings is the FastAPI-official pattern with type validation, not just string loading. |
+| Config | zod env validation | t3-env | zod is already a dependency via shadcn/ui; t3-env adds another wrapper with minimal benefit. |
 ## Installation
-### Backend
-### Frontend
-# Add shadcn/ui
-# Core components needed
+### Full Stack (single Next.js project)
+# npm install
+# npx shadcn@latest init
+# npx shadcn@latest add card badge input button
 ## Architecture Notes for Roadmap
+# Next.js API routes serve as backend (no separate server)
+# x402 HTTP gateway handles OpenGradient payment signing
 # payment_hash on result is the verification proof displayed in UI
 ## Sources
-- OpenGradient SDK PyPI: https://pypi.org/project/opengradient/ (verified 2026-03-27, v0.9.3)
-- web3.py PyPI: https://pypi.org/project/web3/ (verified 2026-03-27, v7.14.1)
-- web3.py docs: https://web3py.readthedocs.io/ (v7.14.1)
-- FastAPI PyPI: https://pypi.org/project/fastapi/ (verified 2026-03-27, v0.135.2)
-- FastAPI production patterns: https://orchestrator.dev/blog/2025-1-30-fastapi-production-patterns/
-- solana-py PyPI: https://pypi.org/project/solana/ (verified 2026-03-27, v0.36.11)
-- solders PyPI: https://pypi.org/project/solders/ (verified 2026-03-27, v0.27.1)
-- httpx PyPI: https://pypi.org/project/httpx/ (verified 2026-03-27, v0.28.1)
-- pydantic-settings PyPI: https://pypi.org/project/pydantic-settings/ (verified 2026-03-27, v2.13.1)
+- OpenGradient SDK reference: OPENGRADIENT_REFERENCE.md (local project file)
+- x402 protocol: https://www.x402.org/ (HTTP payment protocol used for OpenGradient inference)
+- viem docs: https://viem.sh/ (TypeScript EVM library)
+- @solana/web3.js: https://solana-labs.github.io/solana-web3.js/
 - Next.js 16.2 release: https://nextjs.org/blog/next-16-2 (March 18, 2026)
 - Tailwind CSS v4 release: https://tailwindcss.com/blog/tailwindcss-v4 (January 22, 2025)
 - shadcn/ui Next.js install: https://ui.shadcn.com/docs/installation/next
 - Solana getTokenLargestAccounts: https://solana.com/docs/rpc/http/gettokenlargestaccounts
 - Solana getTokenSupply: https://solana.com/docs/rpc/http/gettokensupply
-- FastAPI settings pattern: https://fastapi.tiangolo.com/advanced/settings/
-- OpenGradient SDK reference: OPENGRADIENT_REFERENCE.md (local project file)
 <!-- GSD:stack-end -->
 
 <!-- GSD:conventions-start source:CONVENTIONS.md -->
