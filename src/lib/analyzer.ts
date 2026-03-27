@@ -62,12 +62,15 @@ function analyzeLiquidity(liquidity: LiquidityData): RiskFactor {
   };
 }
 
+const OG_EXPLORER_BASE = "https://explorer.opengradient.ai/tx";
+
 export function buildAnalysis(
   token: TokenInfo,
   holders: HolderData,
   liquidity: LiquidityData,
   contract: ContractData,
   isMock: boolean,
+  settlementHash?: string | null,
 ): AnalysisResult {
   const factors: RiskFactor[] = [
     analyzeContract(contract),
@@ -95,8 +98,8 @@ export function buildAnalysis(
     contract,
     verification: {
       provider: "opengradient-tee",
-      settlementHash: null,
-      explorerUrl: null,
+      settlementHash: settlementHash ?? null,
+      explorerUrl: settlementHash ? `${OG_EXPLORER_BASE}/${settlementHash}` : null,
       isMock,
     },
     analyzedAt: new Date().toISOString(),
