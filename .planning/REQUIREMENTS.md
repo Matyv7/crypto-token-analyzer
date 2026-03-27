@@ -25,8 +25,8 @@
 ### Verification
 
 - [ ] **VERF-01**: TEE verification proof badge displayed prominently on results
-- [ ] **VERF-02**: Analysis runs through OpenGradient TEE-verified inference
-- [ ] **VERF-03**: Settlement uses Individual Full mode for on-chain audit trail
+- [x] **VERF-02**: Analysis runs through OpenGradient TEE-verified inference
+- [x] **VERF-03**: Settlement uses Individual Full mode for on-chain audit trail
 
 ### Input Handling
 
@@ -81,8 +81,8 @@
 | RISK-02 | Phase 3 | Pending |
 | RISK-03 | Phase 3 | Pending |
 | VERF-01 | Phase 3 | Pending |
-| VERF-02 | Phase 1 | Pending |
-| VERF-03 | Phase 1 | Pending |
+| VERF-02 | Phase 1 | Complete |
+| VERF-03 | Phase 1 | Complete |
 | INPT-01 | Phase 2 | Pending |
 | INPT-02 | Phase 2 | Pending |
 | INPT-03 | Phase 2 | Pending |

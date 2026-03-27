@@ -27,7 +27,10 @@
   2. The correct settlement hash field (distinct from the payment hash) is identified and confirmed against the OpenGradient block explorer
   3. `INDIVIDUAL_FULL` settlement mode produces an on-chain record visible at `explorer.opengradient.ai`
   4. Private key and OPG approval flow work at startup with a running FastAPI app
-**Plans**: TBD
+**Plans**: 1 plan
+
+Plans:
+- [x] 01-01-PLAN.md — FastAPI skeleton + live SDK smoke test (settlement hash field discovery)
 
 ### Phase 2: Data and Input Layer
 **Goal**: All on-chain data needed for analysis can be fetched, and any valid token input resolves to a contract address
@@ -71,7 +74,7 @@
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. SDK Foundation | 0/? | Not started | - |
+| 1. SDK Foundation | 0/1 | Planning complete | - |
 | 2. Data and Input Layer | 0/? | Not started | - |
 | 3. Analysis Engine | 0/? | Not started | - |
 | 4. Frontend and API | 0/? | Not started | - |
@@ -79,4 +82,4 @@
 ---
 
 *Roadmap created: 2026-03-27*
-*Last updated: 2026-03-27 after initial roadmap creation*
+*Last updated: 2026-03-27 after Phase 1 planning*
