@@ -18,28 +18,54 @@ const gradeLabels: Record<RiskGrade, string> = {
   F: "Critical Risk",
 };
 
-function GradeBadge({ grade }: { grade: RiskGrade }) {
+function RiskMeter({ grade }: { grade: RiskGrade }) {
+  const gradePercent: Record<RiskGrade, number> = { A: 90, B: 72, C: 55, D: 38, F: 15 };
+  const percent = gradePercent[grade];
+  const circumference = 2 * Math.PI * 54; // radius 54
+  const offset = circumference - (percent / 100) * circumference;
+
   return (
-    <div style={{ textAlign: "center" }}>
+    <div style={{ position: "relative", width: "160px", height: "160px", margin: "0 auto" }}>
+      <svg width="160" height="160" viewBox="0 0 120 120" style={{ transform: "rotate(-90deg)" }}>
+        {/* Background circle */}
+        <circle cx="60" cy="60" r="54" fill="none" stroke="var(--border)" strokeWidth="8" />
+        {/* Animated progress */}
+        <circle
+          cx="60" cy="60" r="54"
+          fill="none"
+          stroke={gradeColors[grade]}
+          strokeWidth="8"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          style={{
+            transition: "stroke-dashoffset 1.5s ease-out",
+            filter: `drop-shadow(0 0 8px ${gradeColors[grade]}40)`,
+          }}
+        />
+      </svg>
       <div style={{
-        fontSize: "80px",
-        fontWeight: 300,
-        color: gradeColors[grade],
-        lineHeight: 1,
-        letterSpacing: "-0.025em",
+        position: "absolute",
+        inset: 0,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
       }}>
-        {grade}
-      </div>
-      <div style={{
-        fontSize: "13px",
-        color: gradeColors[grade],
-        fontFamily: '"Geist Mono", monospace',
-        fontWeight: 500,
-        marginTop: "8px",
-        letterSpacing: "0.08em",
-        textTransform: "uppercase" as const,
-      }}>
-        {gradeLabels[grade]}
+        <span style={{
+          fontSize: "48px",
+          fontWeight: 300,
+          color: gradeColors[grade],
+          lineHeight: 1,
+        }}>{grade}</span>
+        <span style={{
+          fontSize: "11px",
+          fontFamily: "'Geist Mono', monospace",
+          textTransform: "uppercase",
+          letterSpacing: "0.1em",
+          color: "var(--text-muted)",
+          marginTop: "4px",
+        }}>{gradeLabels[grade]}</span>
       </div>
     </div>
   );
@@ -153,7 +179,7 @@ export default function AnalysisResult({ result }: Props) {
         }}>
           {result.token.name}
         </p>
-        <GradeBadge grade={result.grade} />
+        <RiskMeter grade={result.grade} />
         <p style={{
           color: "#bdebf7",
           fontSize: "14px",

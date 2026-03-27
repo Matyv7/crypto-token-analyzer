@@ -3,12 +3,21 @@
 import { useState, useRef } from "react";
 import TokenInput from "./components/TokenInput";
 import AnalysisResult from "./components/AnalysisResult";
-import type { AnalysisResult as AnalysisResultType } from "@/lib/types";
+import type { AnalysisResult as AnalysisResultType, RiskGrade } from "@/lib/types";
+
+const historyGradeColors: Record<RiskGrade, string> = {
+  A: "var(--grade-a)",
+  B: "var(--grade-b)",
+  C: "var(--grade-c)",
+  D: "var(--grade-d)",
+  F: "var(--grade-f)",
+};
 
 export default function Home() {
   const [result, setResult] = useState<AnalysisResultType | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [history, setHistory] = useState<Array<{ symbol: string; grade: RiskGrade; chain: string; address: string }>>([]);
   const analyzeRef = useRef<HTMLDivElement>(null);
 
   const handleAnalyze = async (address: string, chain: string) => {
@@ -31,6 +40,7 @@ export default function Home() {
       }
 
       setResult(data);
+      setHistory(prev => [{ symbol: data.token.symbol, grade: data.grade, chain: data.token.chain, address: data.token.address }, ...prev].slice(0, 5));
     } catch {
       setError("Failed to connect to the server");
     } finally {
@@ -223,35 +233,54 @@ export default function Home() {
         {/* Loading */}
         {isLoading && (
           <div style={{
-            textAlign: "center",
-            marginTop: "48px",
+            maxWidth: "640px",
+            margin: "32px auto",
             animation: "ogFadeUp 0.4s ease-out",
           }}>
             <div style={{
-              width: "48px",
-              height: "48px",
-              border: "2px solid rgba(36, 188, 227, 0.15)",
-              borderTop: "2px solid #24bce3",
-              borderRadius: "50%",
-              margin: "0 auto 16px",
-              animation: "spin 1s linear infinite",
-            }} />
-            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-            <div style={{
-              fontSize: "18px",
-              fontWeight: 300,
-              color: "#e9f8fc",
-              marginBottom: "8px",
+              backgroundColor: "var(--bg-card)",
+              border: "1px solid var(--border)",
+              borderRadius: "16px",
+              padding: "32px",
+              textAlign: "center",
             }}>
-              Analyzing token...
-            </div>
-            <div style={{
-              fontSize: "13px",
-              fontFamily: '"Geist Mono", monospace',
-              color: "#167188",
-              letterSpacing: "0.03em",
-            }}>
-              Fetching on-chain data and running TEE-verified inference
+              <div style={{ marginBottom: "20px" }}>
+                <div style={{
+                  width: "48px",
+                  height: "48px",
+                  border: "3px solid var(--border)",
+                  borderTop: "3px solid var(--accent)",
+                  borderRadius: "50%",
+                  margin: "0 auto",
+                  animation: "spin 1s linear infinite",
+                }} />
+              </div>
+              <div style={{
+                fontFamily: "'Geist Mono', monospace",
+                fontSize: "13px",
+                textTransform: "uppercase",
+                letterSpacing: "0.1em",
+                color: "var(--accent)",
+                marginBottom: "12px",
+              }}>Analyzing Token</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxWidth: "300px", margin: "0 auto" }}>
+                {["Fetching contract data", "Scanning transfer events", "Checking liquidity pools", "Computing risk score"].map((step, i) => (
+                  <div key={step} style={{
+                    display: "flex", alignItems: "center", gap: "8px",
+                    color: "var(--text-muted)",
+                    fontSize: "13px",
+                    animation: `ogFadeUp 0.4s ease-out ${i * 0.2}s both`,
+                  }}>
+                    <div style={{
+                      width: "6px", height: "6px", borderRadius: "50%",
+                      backgroundColor: "var(--accent)",
+                      animation: "pulse 1.5s infinite",
+                      animationDelay: `${i * 0.3}s`,
+                    }} />
+                    {step}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -285,6 +314,80 @@ export default function Home() {
           </div>
         )}
       </section>
+
+      {/* Recent Analyses */}
+      {history.length > 0 && (
+        <section style={{
+          maxWidth: "1200px",
+          margin: "0 auto",
+          padding: "0 24px 64px",
+          animation: "ogFadeUp 0.5s ease-out",
+        }}>
+          <h3 style={{
+            fontSize: "13px",
+            fontFamily: '"Geist Mono", monospace',
+            fontWeight: 500,
+            marginBottom: "16px",
+            color: "#167188",
+            letterSpacing: "0.08em",
+            textTransform: "uppercase" as const,
+          }}>
+            Recent Analyses
+          </h3>
+          <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+            {history.map((item, idx) => (
+              <button
+                key={`${item.address}-${idx}`}
+                onClick={() => {
+                  scrollToAnalyze();
+                  handleAnalyze(item.address, item.chain);
+                }}
+                style={{
+                  backgroundColor: "#141e32",
+                  border: "1px solid rgba(36, 188, 227, 0.15)",
+                  borderRadius: "12px",
+                  padding: "14px 20px",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "12px",
+                  transition: "border-color 0.2s ease, box-shadow 0.2s ease",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = "rgba(36, 188, 227, 0.3)";
+                  e.currentTarget.style.boxShadow = "0 0 24px rgba(36, 188, 227, 0.1)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = "rgba(36, 188, 227, 0.15)";
+                  e.currentTarget.style.boxShadow = "none";
+                }}
+              >
+                <span style={{
+                  fontSize: "24px",
+                  fontWeight: 300,
+                  color: historyGradeColors[item.grade],
+                  lineHeight: 1,
+                  minWidth: "28px",
+                }}>{item.grade}</span>
+                <div style={{ textAlign: "left" }}>
+                  <div style={{
+                    color: "#e9f8fc",
+                    fontSize: "14px",
+                    fontWeight: 400,
+                  }}>{item.symbol}</div>
+                  <div style={{
+                    color: "#167188",
+                    fontSize: "11px",
+                    fontFamily: '"Geist Mono", monospace',
+                    letterSpacing: "0.05em",
+                    textTransform: "uppercase" as const,
+                  }}>{item.chain}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Footer */}
       <footer style={{
