@@ -69,33 +69,33 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ANLYS-01 | — | Pending |
-| ANLYS-02 | — | Pending |
-| ANLYS-03 | — | Pending |
-| ANLYS-04 | — | Pending |
-| ANLYS-05 | — | Pending |
-| ANLYS-06 | — | Pending |
-| ANLYS-07 | — | Pending |
-| ANLYS-08 | — | Pending |
-| RISK-01 | — | Pending |
-| RISK-02 | — | Pending |
-| RISK-03 | — | Pending |
-| VERF-01 | — | Pending |
-| VERF-02 | — | Pending |
-| VERF-03 | — | Pending |
-| INPT-01 | — | Pending |
-| INPT-02 | — | Pending |
-| INPT-03 | — | Pending |
-| INPT-04 | — | Pending |
-| UI-01 | — | Pending |
-| UI-02 | — | Pending |
-| UI-03 | — | Pending |
+| ANLYS-01 | Phase 2 | Pending |
+| ANLYS-02 | Phase 2 | Pending |
+| ANLYS-03 | Phase 2 | Pending |
+| ANLYS-04 | Phase 2 | Pending |
+| ANLYS-05 | Phase 2 | Pending |
+| ANLYS-06 | Phase 2 | Pending |
+| ANLYS-07 | Phase 2 | Pending |
+| ANLYS-08 | Phase 2 | Pending |
+| RISK-01 | Phase 3 | Pending |
+| RISK-02 | Phase 3 | Pending |
+| RISK-03 | Phase 3 | Pending |
+| VERF-01 | Phase 3 | Pending |
+| VERF-02 | Phase 1 | Pending |
+| VERF-03 | Phase 1 | Pending |
+| INPT-01 | Phase 2 | Pending |
+| INPT-02 | Phase 2 | Pending |
+| INPT-03 | Phase 2 | Pending |
+| INPT-04 | Phase 2 | Pending |
+| UI-01 | Phase 4 | Pending |
+| UI-02 | Phase 4 | Pending |
+| UI-03 | Phase 4 | Pending |
 
 **Coverage:**
 - v1 requirements: 21 total
-- Mapped to phases: 0
-- Unmapped: 21 ⚠️
+- Mapped to phases: 21
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-03-27*
-*Last updated: 2026-03-27 after initial definition*
+*Last updated: 2026-03-27 after roadmap creation — all 21 requirements mapped*
