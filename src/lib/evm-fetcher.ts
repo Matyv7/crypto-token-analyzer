@@ -202,10 +202,24 @@ export async function fetchHolderData(address: string, chain: SupportedChain): P
   }
 }
 
+// --- DEX Factory / Pool Manager addresses ---
+
 const UNISWAP_V2_FACTORY: Record<SupportedChain, Address> = {
   ethereum: "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
   base: "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6",
   bsc: "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73",
+};
+
+const UNISWAP_V3_FACTORY: Record<SupportedChain, Address> = {
+  ethereum: "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+  base: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
+  bsc: "0xdB1d10011AD0Ff90774D0C6Bb92e5C5c8b4461F7",
+};
+
+const UNISWAP_V4_POOL_MANAGER: Record<SupportedChain, Address> = {
+  ethereum: "0x000000000004444c5dc75cB358380D2e3dE08A90",
+  base: "0x498581fF718922c3f8e6A244956aF099B2652b2b",
+  bsc: "0x28e2Ea090877bF75740558f6BFB36A5fFee9e9dF",
 };
 
 const WRAPPED_NATIVE: Record<SupportedChain, Address> = {
@@ -214,7 +228,6 @@ const WRAPPED_NATIVE: Record<SupportedChain, Address> = {
   bsc: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
 };
 
-// Major stablecoins to check for liquidity pairs
 const STABLECOINS: Record<SupportedChain, Address[]> = {
   ethereum: [
     "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // USDC
@@ -229,11 +242,43 @@ const STABLECOINS: Record<SupportedChain, Address[]> = {
   ],
 };
 
-const PAIR_ABI = parseAbi([
+const V3_FEE_TIERS = [500, 3000, 10000, 100] as const;
+
+const V2_ABI = parseAbi([
   "function getPair(address, address) view returns (address)",
   "function getReserves() view returns (uint112, uint112, uint32)",
   "function token0() view returns (address)",
 ]);
+
+const V3_ABI = parseAbi([
+  "function getPool(address, address, uint24) view returns (address)",
+  "function liquidity() view returns (uint128)",
+  "function slot0() view returns (uint160, int24, uint16, uint16, uint16, uint8, bool)",
+]);
+
+const V4_ABI = parseAbi([
+  "function getSlot0(bytes32) view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)",
+  "function getLiquidity(bytes32) view returns (uint128)",
+]);
+
+type PoolResult = { poolAddress: string; depth: "deep" | "moderate" | "shallow" | "none" };
+const ZERO = "0x0000000000000000000000000000000000000000";
+
+function classifyEthDepth(ethValue: number): "deep" | "moderate" | "shallow" | "none" {
+  if (ethValue > 100) return "deep";
+  if (ethValue > 10) return "moderate";
+  if (ethValue > 0.1) return "shallow";
+  return "none";
+}
+
+function classifyUsdDepth(usdValue: number): "deep" | "moderate" | "shallow" | "none" {
+  if (usdValue > 200_000) return "deep";
+  if (usdValue > 20_000) return "moderate";
+  if (usdValue > 500) return "shallow";
+  return "none";
+}
+
+// --- V2 ---
 
 async function checkV2Pair(
   client: ReturnType<typeof getClient>,
@@ -244,25 +289,16 @@ async function checkV2Pair(
 ): Promise<{ poolAddress: Address; quoteReserve: number } | null> {
   try {
     const pairAddress = await client.readContract({
-      address: factory,
-      abi: PAIR_ABI,
-      functionName: "getPair",
-      args: [tokenAddr, quoteToken],
+      address: factory, abi: V2_ABI, functionName: "getPair", args: [tokenAddr, quoteToken],
     }) as Address;
-
-    const zero = "0x0000000000000000000000000000000000000000";
-    if (!pairAddress || pairAddress === zero) return null;
+    if (!pairAddress || pairAddress === ZERO) return null;
 
     const reserves = await client.readContract({
-      address: pairAddress,
-      abi: PAIR_ABI,
-      functionName: "getReserves",
+      address: pairAddress, abi: V2_ABI, functionName: "getReserves",
     }) as [bigint, bigint, number];
 
     const token0 = await client.readContract({
-      address: pairAddress,
-      abi: PAIR_ABI,
-      functionName: "token0",
+      address: pairAddress, abi: V2_ABI, functionName: "token0",
     }) as Address;
 
     const quoteReserve = token0.toLowerCase() === quoteToken.toLowerCase() ? reserves[0] : reserves[1];
@@ -272,38 +308,139 @@ async function checkV2Pair(
   }
 }
 
+// --- V3 ---
+
+async function checkV3Pool(
+  client: ReturnType<typeof getClient>,
+  factory: Address,
+  tokenAddr: Address,
+  quoteToken: Address,
+): Promise<{ poolAddress: Address; liquidity: bigint } | null> {
+  for (const fee of V3_FEE_TIERS) {
+    try {
+      const pool = await client.readContract({
+        address: factory, abi: V3_ABI, functionName: "getPool", args: [tokenAddr, quoteToken, fee],
+      }) as Address;
+      if (!pool || pool === ZERO) continue;
+
+      const liquidity = await client.readContract({
+        address: pool, abi: V3_ABI, functionName: "liquidity",
+      }) as bigint;
+
+      if (liquidity > BigInt(0)) {
+        return { poolAddress: pool, liquidity };
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+// --- V4 ---
+
+function computeV4PoolId(
+  token0: Address,
+  token1: Address,
+  fee: number,
+  tickSpacing: number,
+  hooks: Address,
+): `0x${string}` {
+  const { keccak256, encodeAbiParameters } = require("viem") as typeof import("viem");
+  // Sort tokens
+  const [sorted0, sorted1] = token0.toLowerCase() < token1.toLowerCase()
+    ? [token0, token1] : [token1, token0];
+  return keccak256(
+    encodeAbiParameters(
+      [{ type: "address" }, { type: "address" }, { type: "uint24" }, { type: "int24" }, { type: "address" }],
+      [sorted0, sorted1, fee, tickSpacing, hooks],
+    ),
+  );
+}
+
+async function checkV4Pool(
+  client: ReturnType<typeof getClient>,
+  poolManager: Address,
+  tokenAddr: Address,
+  quoteToken: Address,
+): Promise<{ poolAddress: string; liquidity: bigint } | null> {
+  // V4 common fee/tickSpacing combos and no hooks
+  const configs = [
+    { fee: 500, tickSpacing: 10 },
+    { fee: 3000, tickSpacing: 60 },
+    { fee: 10000, tickSpacing: 200 },
+    { fee: 100, tickSpacing: 1 },
+  ];
+  const noHooks = ZERO as Address;
+
+  for (const { fee, tickSpacing } of configs) {
+    try {
+      const poolId = computeV4PoolId(tokenAddr, quoteToken, fee, tickSpacing, noHooks);
+      const liquidity = await client.readContract({
+        address: poolManager, abi: V4_ABI, functionName: "getLiquidity", args: [poolId],
+      }) as bigint;
+
+      if (liquidity > BigInt(0)) {
+        return { poolAddress: `v4:${poolId.slice(0, 10)}...`, liquidity };
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+// --- Main liquidity fetcher ---
+
+// V3 liquidity thresholds (raw liquidity units — rough heuristic)
+function classifyV3Depth(liquidity: bigint): "deep" | "moderate" | "shallow" | "none" {
+  if (liquidity > BigInt("1000000000000000000")) return "deep";       // >1e18
+  if (liquidity > BigInt("100000000000000000")) return "moderate";     // >1e17
+  if (liquidity > BigInt("1000000000000000")) return "shallow";        // >1e15
+  return "none";
+}
+
 export async function fetchLiquidityData(address: string, chain: SupportedChain): Promise<LiquidityData> {
   const client = getClient(chain);
   const tokenAddr = address as Address;
-  const factory = UNISWAP_V2_FACTORY[chain];
   const wrappedNative = WRAPPED_NATIVE[chain];
 
-  try {
-    // Check WETH/WBNB pair first
-    const nativePair = await checkV2Pair(client, factory, tokenAddr, wrappedNative, 18);
-    if (nativePair && nativePair.quoteReserve > 0.01) {
-      const ethValue = nativePair.quoteReserve;
-      let depth: "deep" | "moderate" | "shallow" | "none";
-      if (ethValue > 100) depth = "deep";
-      else if (ethValue > 10) depth = "moderate";
-      else if (ethValue > 0.1) depth = "shallow";
-      else depth = "none";
+  // Quote tokens to check: native + stablecoins
+  const quoteTokens: Array<{ token: Address; decimals: number; isNative: boolean }> = [
+    { token: wrappedNative, decimals: 18, isNative: true },
+    ...(STABLECOINS[chain] || []).map(t => ({ token: t, decimals: 6, isNative: false })),
+  ];
 
-      return { hasLiquidity: true, poolAddress: nativePair.poolAddress, depth };
+  try {
+    // 1. Check Uniswap V2
+    const v2Factory = UNISWAP_V2_FACTORY[chain];
+    for (const qt of quoteTokens) {
+      const pair = await checkV2Pair(client, v2Factory, tokenAddr, qt.token, qt.decimals);
+      if (pair && pair.quoteReserve > (qt.isNative ? 0.01 : 1)) {
+        const depth = qt.isNative
+          ? classifyEthDepth(pair.quoteReserve)
+          : classifyUsdDepth(pair.quoteReserve);
+        if (depth !== "none") {
+          return { hasLiquidity: true, poolAddress: pair.poolAddress, depth };
+        }
+      }
     }
 
-    // Check stablecoin pairs (USDC/USDT — 6 decimals)
-    for (const stable of STABLECOINS[chain] || []) {
-      const stablePair = await checkV2Pair(client, factory, tokenAddr, stable, 6);
-      if (stablePair && stablePair.quoteReserve > 1) {
-        const usdValue = stablePair.quoteReserve;
-        let depth: "deep" | "moderate" | "shallow" | "none";
-        if (usdValue > 200_000) depth = "deep";
-        else if (usdValue > 20_000) depth = "moderate";
-        else if (usdValue > 500) depth = "shallow";
-        else depth = "none";
+    // 2. Check Uniswap V3
+    const v3Factory = UNISWAP_V3_FACTORY[chain];
+    for (const qt of quoteTokens) {
+      const pool = await checkV3Pool(client, v3Factory, tokenAddr, qt.token);
+      if (pool) {
+        return { hasLiquidity: true, poolAddress: pool.poolAddress, depth: classifyV3Depth(pool.liquidity) };
+      }
+    }
 
-        return { hasLiquidity: true, poolAddress: stablePair.poolAddress, depth };
+    // 3. Check Uniswap V4
+    const v4Manager = UNISWAP_V4_POOL_MANAGER[chain];
+    for (const qt of quoteTokens) {
+      const pool = await checkV4Pool(client, v4Manager, tokenAddr, qt.token);
+      if (pool) {
+        return { hasLiquidity: true, poolAddress: pool.poolAddress, depth: classifyV3Depth(pool.liquidity) };
       }
     }
 
