@@ -12,7 +12,7 @@ const ERC20_ABI = parseAbi([
 
 // Custom RPC URLs from env, or fall back to free public endpoints
 const RPC_URLS: Record<SupportedChain, string> = {
-  ethereum: process.env.ETH_RPC_URL || "https://eth.llamarpc.com",
+  ethereum: process.env.ETH_RPC_URL || "https://ethereum-rpc.publicnode.com",
   base: process.env.BASE_RPC_URL || "https://mainnet.base.org",
   bsc: process.env.BSC_RPC_URL || "https://bsc-dataseed.binance.org",
 };
@@ -49,9 +49,9 @@ export async function fetchContractData(address: string, chain: SupportedChain):
   const client = getClient(chain);
   const addr = address as Address;
 
-  // Check if contract has code
+  // Check if contract has code (isVerified here means "has deployed bytecode")
   const code = await client.getCode({ address: addr }).catch(() => undefined);
-  const isContract = !!code && code !== "0x";
+  const hasCode = !!code && code !== "0x";
 
   // Try to read owner — if it reverts, assume no owner function
   let owner: string | null = null;
@@ -81,12 +81,53 @@ export async function fetchContractData(address: string, chain: SupportedChain):
   const ownershipRenounced = !owner || owner === zeroAddress;
 
   return {
-    isVerified: isContract, // Simplified — real verification needs etherscan API
+    isVerified: hasCode,
     hasProxy,
     hasMintFunction: hasMint,
     hasBlacklist,
     ownershipRenounced,
   };
+}
+
+const TRANSFER_EVENT = {
+  type: "event" as const,
+  name: "Transfer" as const,
+  inputs: [
+    { type: "address" as const, name: "from" as const, indexed: true },
+    { type: "address" as const, name: "to" as const, indexed: true },
+    { type: "uint256" as const, name: "value" as const, indexed: false },
+  ],
+};
+
+// Scan blocks in chunks to avoid RPC limits; returns aggregated logs
+async function scanTransferLogs(
+  client: ReturnType<typeof getClient>,
+  addr: Address,
+  fromBlock: bigint,
+  toBlock: bigint,
+) {
+  const CHUNK = BigInt(10_000);
+  const allLogs: Awaited<ReturnType<typeof client.getLogs>>[] = [];
+  let start = fromBlock;
+
+  while (start <= toBlock) {
+    const end = start + CHUNK > toBlock ? toBlock : start + CHUNK;
+    try {
+      const chunk = await client.getLogs({
+        address: addr,
+        event: TRANSFER_EVENT,
+        fromBlock: start,
+        toBlock: end,
+      });
+      allLogs.push(chunk);
+    } catch {
+      // RPC rejected this range — try smaller chunk or skip
+      break;
+    }
+    start = end + BigInt(1);
+  }
+
+  return allLogs.flat();
 }
 
 export async function fetchHolderData(address: string, chain: SupportedChain): Promise<HolderData> {
@@ -95,30 +136,19 @@ export async function fetchHolderData(address: string, chain: SupportedChain): P
 
   try {
     const currentBlock = await client.getBlockNumber();
-    // Scan last 5000 blocks for Transfer events (balances are approximate)
-    const fromBlock = currentBlock > BigInt(5000) ? currentBlock - BigInt(5000) : BigInt(0);
+    // Scan last 50,000 blocks (~7 days on Ethereum) for Transfer events
+    const scanRange = BigInt(50_000);
+    const fromBlock = currentBlock > scanRange ? currentBlock - scanRange : BigInt(0);
 
-    const logs = await client.getLogs({
-      address: addr,
-      event: {
-        type: "event",
-        name: "Transfer",
-        inputs: [
-          { type: "address", name: "from", indexed: true },
-          { type: "address", name: "to", indexed: true },
-          { type: "uint256", name: "value", indexed: false },
-        ],
-      },
-      fromBlock,
-      toBlock: currentBlock,
-    });
+    const logs = await scanTransferLogs(client, addr, fromBlock, currentBlock);
 
     // Aggregate net transfers per address
     const balances = new Map<string, bigint>();
     for (const log of logs) {
-      const from = (log.args as Record<string, unknown>).from as string;
-      const to = (log.args as Record<string, unknown>).to as string;
-      const value = (log.args as Record<string, unknown>).value as bigint;
+      const args = (log as unknown as { args: Record<string, unknown> }).args;
+      const from = args.from as string;
+      const to = args.to as string;
+      const value = args.value as bigint;
 
       if (from && from !== "0x0000000000000000000000000000000000000000") {
         balances.set(from, (balances.get(from) || BigInt(0)) - value);
@@ -184,6 +214,64 @@ const WRAPPED_NATIVE: Record<SupportedChain, Address> = {
   bsc: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
 };
 
+// Major stablecoins to check for liquidity pairs
+const STABLECOINS: Record<SupportedChain, Address[]> = {
+  ethereum: [
+    "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // USDC
+    "0xdAC17F958D2ee523a2206206994597C13D831ec7", // USDT
+  ],
+  base: [
+    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // USDC
+  ],
+  bsc: [
+    "0x55d398326f99059fF775485246999027B3197955", // USDT
+    "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", // USDC
+  ],
+};
+
+const PAIR_ABI = parseAbi([
+  "function getPair(address, address) view returns (address)",
+  "function getReserves() view returns (uint112, uint112, uint32)",
+  "function token0() view returns (address)",
+]);
+
+async function checkV2Pair(
+  client: ReturnType<typeof getClient>,
+  factory: Address,
+  tokenAddr: Address,
+  quoteToken: Address,
+  quoteDecimals: number,
+): Promise<{ poolAddress: Address; quoteReserve: number } | null> {
+  try {
+    const pairAddress = await client.readContract({
+      address: factory,
+      abi: PAIR_ABI,
+      functionName: "getPair",
+      args: [tokenAddr, quoteToken],
+    }) as Address;
+
+    const zero = "0x0000000000000000000000000000000000000000";
+    if (!pairAddress || pairAddress === zero) return null;
+
+    const reserves = await client.readContract({
+      address: pairAddress,
+      abi: PAIR_ABI,
+      functionName: "getReserves",
+    }) as [bigint, bigint, number];
+
+    const token0 = await client.readContract({
+      address: pairAddress,
+      abi: PAIR_ABI,
+      functionName: "token0",
+    }) as Address;
+
+    const quoteReserve = token0.toLowerCase() === quoteToken.toLowerCase() ? reserves[0] : reserves[1];
+    return { poolAddress: pairAddress, quoteReserve: Number(quoteReserve) / 10 ** quoteDecimals };
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchLiquidityData(address: string, chain: SupportedChain): Promise<LiquidityData> {
   const client = getClient(chain);
   const tokenAddr = address as Address;
@@ -191,51 +279,35 @@ export async function fetchLiquidityData(address: string, chain: SupportedChain)
   const wrappedNative = WRAPPED_NATIVE[chain];
 
   try {
-    // Get pair address from factory
-    const pairAddress = await client.readContract({
-      address: factory,
-      abi: parseAbi(["function getPair(address, address) view returns (address)"]),
-      functionName: "getPair",
-      args: [tokenAddr, wrappedNative],
-    }) as Address;
+    // Check WETH/WBNB pair first
+    const nativePair = await checkV2Pair(client, factory, tokenAddr, wrappedNative, 18);
+    if (nativePair && nativePair.quoteReserve > 0.01) {
+      const ethValue = nativePair.quoteReserve;
+      let depth: "deep" | "moderate" | "shallow" | "none";
+      if (ethValue > 100) depth = "deep";
+      else if (ethValue > 10) depth = "moderate";
+      else if (ethValue > 0.1) depth = "shallow";
+      else depth = "none";
 
-    const zeroPair = "0x0000000000000000000000000000000000000000";
-    if (!pairAddress || pairAddress === zeroPair) {
-      return { hasLiquidity: false, depth: "none" };
+      return { hasLiquidity: true, poolAddress: nativePair.poolAddress, depth };
     }
 
-    // Read reserves from pair
-    const reserves = await client.readContract({
-      address: pairAddress,
-      abi: parseAbi(["function getReserves() view returns (uint112, uint112, uint32)"]),
-      functionName: "getReserves",
-    }) as [bigint, bigint, number];
+    // Check stablecoin pairs (USDC/USDT — 6 decimals)
+    for (const stable of STABLECOINS[chain] || []) {
+      const stablePair = await checkV2Pair(client, factory, tokenAddr, stable, 6);
+      if (stablePair && stablePair.quoteReserve > 1) {
+        const usdValue = stablePair.quoteReserve;
+        let depth: "deep" | "moderate" | "shallow" | "none";
+        if (usdValue > 200_000) depth = "deep";
+        else if (usdValue > 20_000) depth = "moderate";
+        else if (usdValue > 500) depth = "shallow";
+        else depth = "none";
 
-    const [reserve0, reserve1] = reserves;
+        return { hasLiquidity: true, poolAddress: stablePair.poolAddress, depth };
+      }
+    }
 
-    // Determine which reserve is the native token
-    const token0 = await client.readContract({
-      address: pairAddress,
-      abi: parseAbi(["function token0() view returns (address)"]),
-      functionName: "token0",
-    }) as Address;
-
-    const nativeReserve = token0.toLowerCase() === wrappedNative.toLowerCase() ? reserve0 : reserve1;
-
-    // Classify depth based on native token reserves (in wei)
-    // >100 ETH = deep, >10 ETH = moderate, >1 ETH = shallow
-    const ethValue = Number(nativeReserve) / 1e18;
-    let depth: "deep" | "moderate" | "shallow" | "none";
-    if (ethValue > 100) depth = "deep";
-    else if (ethValue > 10) depth = "moderate";
-    else if (ethValue > 0.1) depth = "shallow";
-    else depth = "none";
-
-    return {
-      hasLiquidity: true,
-      poolAddress: pairAddress,
-      depth,
-    };
+    return { hasLiquidity: false, depth: "none" };
   } catch {
     return { hasLiquidity: false, depth: "none" };
   }

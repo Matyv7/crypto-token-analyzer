@@ -19,7 +19,7 @@ function analyzeContract(contract: ContractData): RiskFactor {
   let score = 100;
   const issues: string[] = [];
 
-  if (!contract.isVerified) { score -= 30; issues.push("unverified source code"); }
+  if (!contract.isVerified) { score -= 30; issues.push("no contract bytecode found"); }
   if (contract.hasMintFunction) { score -= 20; issues.push("mint function present"); }
   if (contract.hasBlacklist) { score -= 15; issues.push("blacklist capability"); }
   if (!contract.ownershipRenounced) { score -= 10; issues.push("ownership not renounced"); }
@@ -29,7 +29,7 @@ function analyzeContract(contract: ContractData): RiskFactor {
     name: "Contract Security",
     score: gradeFromScore(Math.max(0, score)),
     weight: 3,
-    description: issues.length === 0 ? "Contract passes all security checks" : `Issues: ${issues.join(", ")}`,
+    description: issues.length === 0 ? "Contract passes all on-chain security checks" : `Flags: ${issues.join(", ")}`,
   };
 }
 

@@ -32,13 +32,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: `Unsupported chain: ${chain}. Use: ${validChains.join(", ")}` }, { status: 400 });
     }
 
-    // Fetch all on-chain data in parallel
-    const [tokenInfo, contractData, holderData, liquidityData] = await Promise.all([
+    // Fetch on-chain data — token info + contract in parallel, then heavier calls sequentially
+    // to avoid RPC rate limiting on free endpoints
+    const [tokenInfo, contractData] = await Promise.all([
       fetchTokenInfo(address, chain),
       fetchContractData(address, chain),
-      fetchHolderData(address, chain),
-      fetchLiquidityData(address, chain),
     ]);
+    const liquidityData = await fetchLiquidityData(address, chain);
+    const holderData = await fetchHolderData(address, chain);
 
     // Build analysis (mock scoring for now — real LLM analysis when OpenGradient comes online)
     const result = buildAnalysis(tokenInfo, holderData, liquidityData, contractData, true);
