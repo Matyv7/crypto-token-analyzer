@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { privateKeyToAccount } from "viem/accounts";
+import { resolveTeeEndpoint } from "@/lib/opengradient";
 
 export const maxDuration = 60;
 
@@ -28,9 +29,22 @@ export async function GET() {
       return NextResponse.json({ success: false, steps, error: "Invalid private key format" }, { status: 500 });
     }
 
-    // Step 3: Plain fetch to OpenGradient (no x402) — test connectivity
+    // Step 3: Resolve TEE endpoint from on-chain registry
+    let teeEndpoint: string | null = null;
     try {
-      const pingResp = await fetch("https://llm.opengradient.ai/v1/chat/completions", {
+      teeEndpoint = await resolveTeeEndpoint();
+      steps["3_tee_registry"] = { endpoint: teeEndpoint };
+      if (!teeEndpoint) {
+        return NextResponse.json({ success: false, steps, error: "No active TEE endpoints found in registry" }, { status: 500 });
+      }
+    } catch (e) {
+      steps["3_tee_registry"] = { error: String(e) };
+      return NextResponse.json({ success: false, steps, error: "Failed to query TEE registry" }, { status: 500 });
+    }
+
+    // Step 4: Plain fetch to TEE endpoint (no x402) — test connectivity
+    try {
+      const pingResp = await fetch(`${teeEndpoint}/v1/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -41,19 +55,20 @@ export async function GET() {
       });
       const pingStatus = pingResp.status;
       const pingBody = await pingResp.text();
-      steps["3_plain_fetch"] = {
+      steps["4_plain_fetch"] = {
         status: pingStatus,
         body_preview: pingBody.substring(0, 500),
       };
     } catch (e) {
-      steps["3_plain_fetch"] = { error: String(e) };
-      return NextResponse.json({ success: false, steps, error: "Cannot reach OpenGradient API" }, { status: 500 });
+      steps["4_plain_fetch"] = { error: String(e) };
+      return NextResponse.json({ success: false, steps, error: "Cannot reach TEE endpoint" }, { status: 500 });
     }
 
-    // Step 4: x402 fetch
+    // Step 5: x402 fetch
     try {
       const { wrapFetchWithPayment, x402Client } = await import("@x402/fetch");
       const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
+      const { UptoEvmScheme } = await import("@x402/evm/upto/client");
 
       const account = privateKeyToAccount(key as `0x${string}`);
       const client = new x402Client();
@@ -61,14 +76,17 @@ export async function GET() {
         signer: account,
         networks: ["eip155:84532"],
       });
+      const uptoScheme = new UptoEvmScheme(account);
+      client.register("eip155:84532", uptoScheme);
       const x402Fetch = wrapFetchWithPayment(fetch, client);
 
-      steps["4_x402_init"] = "ok";
+      steps["5_x402_init"] = "ok";
 
-      const response = await x402Fetch("https://llm.opengradient.ai/v1/chat/completions", {
+      const response = await x402Fetch(`${teeEndpoint}/v1/chat/completions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Authorization": "Bearer 0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
           "X-SETTLEMENT-TYPE": "individual",
         },
         body: JSON.stringify({
@@ -86,7 +104,7 @@ export async function GET() {
       response.headers.forEach((v: string, k: string) => { respHeaders[k] = v; });
 
       const data = await response.json();
-      steps["5_x402_response"] = {
+      steps["6_x402_response"] = {
         status: response.status,
         headers: respHeaders,
         body: data,
@@ -95,6 +113,7 @@ export async function GET() {
       return NextResponse.json({
         success: true,
         wallet_address: address,
+        tee_endpoint: teeEndpoint,
         llm_response: data?.choices?.[0]?.message?.content,
         full_response: data,
         response_headers: respHeaders,
@@ -102,7 +121,7 @@ export async function GET() {
       });
     } catch (e) {
       const err = e instanceof Error ? { message: e.message, stack: e.stack?.split("\n").slice(0, 5) } : String(e);
-      steps["4_x402_error"] = err;
+      steps["5_x402_error"] = err;
       return NextResponse.json({ success: false, steps, error: String(e instanceof Error ? e.message : e) }, { status: 500 });
     }
   } catch (e) {

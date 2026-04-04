@@ -10,10 +10,17 @@ const ERC20_ABI = parseAbi([
   "function owner() view returns (address)",
 ]);
 
+// Custom RPC URLs from env, or fall back to free public endpoints
+const RPC_URLS: Record<SupportedChain, string> = {
+  ethereum: process.env.ETH_RPC_URL || "https://eth.llamarpc.com",
+  base: process.env.BASE_RPC_URL || "https://mainnet.base.org",
+  bsc: process.env.BSC_RPC_URL || "https://bsc-dataseed.binance.org",
+};
+
 function getClient(chain: SupportedChain) {
   return createPublicClient({
     chain: supportedChains[chain],
-    transport: http(),
+    transport: http(RPC_URLS[chain], { timeout: 15_000 }),
   });
 }
 
