@@ -80,12 +80,41 @@ export async function fetchContractData(address: string, chain: SupportedChain):
   const zeroAddress = "0x0000000000000000000000000000000000000000";
   const ownershipRenounced = !owner || owner === zeroAddress;
 
+  // Estimate contract age via binary search (~5 RPC calls)
+  let estimatedAgeBlocks = 0;
+  if (hasCode) {
+    try {
+      const currentBlock = await client.getBlockNumber();
+      let lo = BigInt(0);
+      let hi = currentBlock;
+      // 5 steps of binary search gives ~32x precision
+      for (let i = 0; i < 5; i++) {
+        const mid = (lo + hi) / BigInt(2);
+        if (mid === lo) break;
+        try {
+          const codeAtMid = await client.getCode({ address: addr, blockNumber: mid });
+          if (codeAtMid && codeAtMid !== "0x") {
+            hi = mid; // contract existed at mid, search earlier
+          } else {
+            lo = mid; // no contract at mid, search later
+          }
+        } catch {
+          lo = mid; // RPC error — assume no code, search later
+        }
+      }
+      estimatedAgeBlocks = Number(currentBlock - hi);
+    } catch {
+      // Age estimation failed — leave as 0
+    }
+  }
+
   return {
     isVerified: hasCode,
     hasProxy,
     hasMintFunction: hasMint,
     hasBlacklist,
     ownershipRenounced,
+    estimatedAgeBlocks,
   };
 }
 
@@ -188,10 +217,22 @@ export async function fetchHolderData(address: string, chain: SupportedChain): P
     const concentrationRisk: "low" | "medium" | "high" =
       top5Percent > 60 ? "high" : top5Percent > 30 ? "medium" : "low";
 
+    // Collect unique addresses from all transfers
+    const uniqueAddrs = new Set<string>();
+    for (const log of logs) {
+      const args = (log as unknown as { args: Record<string, unknown> }).args;
+      const from = args.from as string;
+      const to = args.to as string;
+      if (from && from !== "0x0000000000000000000000000000000000000000") uniqueAddrs.add(from.toLowerCase());
+      if (to && to !== "0x0000000000000000000000000000000000000000") uniqueAddrs.add(to.toLowerCase());
+    }
+
     return {
       topHolders,
       totalHolders: balances.size,
       concentrationRisk,
+      transferCount: logs.length,
+      uniqueAddresses: uniqueAddrs.size,
     };
   } catch {
     // Fallback if event scanning fails (some RPCs limit getLogs)

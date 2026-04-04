@@ -41,8 +41,7 @@ export async function POST(request: Request) {
     const liquidityData = await fetchLiquidityData(address, chain);
     const holderData = await fetchHolderData(address, chain);
 
-    // Build analysis (mock scoring for now — real LLM analysis when OpenGradient comes online)
-    const result = buildAnalysis(tokenInfo, holderData, liquidityData, contractData, true);
+    const result = buildAnalysis(tokenInfo, holderData, liquidityData, contractData);
 
     return NextResponse.json(result);
   } catch (error) {

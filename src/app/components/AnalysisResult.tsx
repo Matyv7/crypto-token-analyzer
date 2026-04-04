@@ -324,9 +324,7 @@ export default function AnalysisResult({ result }: Props) {
       {/* Verification */}
       <div style={{
         backgroundColor: "#141e32",
-        border: result.verification.isMock
-          ? "1px solid rgba(237, 178, 0, 0.3)"
-          : "1px solid rgba(5, 223, 114, 0.3)",
+        border: "1px solid rgba(36, 188, 227, 0.15)",
         borderRadius: "16px",
         padding: "20px 24px",
       }}>
@@ -338,16 +336,16 @@ export default function AnalysisResult({ result }: Props) {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            backgroundColor: result.verification.isMock
-              ? "rgba(237, 178, 0, 0.1)"
-              : "rgba(5, 223, 114, 0.1)",
+            backgroundColor: result.verification.settlementHash
+              ? "rgba(5, 223, 114, 0.1)"
+              : "rgba(36, 188, 227, 0.1)",
             flexShrink: 0,
           }}>
             <span style={{
               fontSize: "16px",
-              color: result.verification.isMock ? "#edb200" : "#05df72",
+              color: result.verification.settlementHash ? "#05df72" : "#24bce3",
             }}>
-              {result.verification.isMock ? "\u26A0" : "\u2713"}
+              {result.verification.settlementHash ? "\u2713" : "\u26D4"}
             </span>
           </div>
           <div>
@@ -357,7 +355,7 @@ export default function AnalysisResult({ result }: Props) {
               color: "#e9f8fc",
               marginBottom: "4px",
             }}>
-              {result.verification.isMock ? "Mock Analysis" : "Verified by OpenGradient TEE"}
+              {result.verification.settlementHash ? "Verified by OpenGradient TEE" : "On-Chain Analysis"}
             </div>
             <div style={{
               color: "#167188",
@@ -365,11 +363,9 @@ export default function AnalysisResult({ result }: Props) {
               fontFamily: '"Geist Mono", monospace',
               letterSpacing: "0.02em",
             }}>
-              {result.verification.isMock
-                ? "OpenGradient API offline \u2014 using local scoring. TEE verification unavailable."
-                : result.verification.explorerUrl
-                  ? `Settlement: ${result.verification.settlementHash}`
-                  : "Verification pending"
+              {result.verification.explorerUrl
+                ? `Settlement: ${result.verification.settlementHash}`
+                : "Scored from on-chain data — contract, holders, liquidity, age & activity"
               }
             </div>
           </div>

@@ -62,6 +62,78 @@ function analyzeLiquidity(liquidity: LiquidityData): RiskFactor {
   };
 }
 
+function analyzeTokenAge(contract: ContractData): RiskFactor {
+  const ageBlocks = contract.estimatedAgeBlocks ?? 0;
+
+  // Rough block-to-time: ~12s/block on Ethereum, ~2s on Base/BSC
+  // We use block count thresholds that work as a general heuristic
+  let score: number;
+  let description: string;
+
+  if (ageBlocks === 0) {
+    score = 50;
+    description = "Contract age could not be determined";
+  } else if (ageBlocks > 2_000_000) {
+    // ~9+ months on Ethereum, ~46 days on BSC/Base (still established)
+    score = 95;
+    description = `Contract deployed ~${Math.round(ageBlocks / 200_000)}M+ blocks ago — well established`;
+  } else if (ageBlocks > 500_000) {
+    score = 80;
+    description = `Contract deployed ~${Math.round(ageBlocks / 1000)}K blocks ago — moderately aged`;
+  } else if (ageBlocks > 100_000) {
+    score = 60;
+    description = `Contract deployed ~${Math.round(ageBlocks / 1000)}K blocks ago — relatively new`;
+  } else if (ageBlocks > 10_000) {
+    score = 35;
+    description = `Contract deployed ~${ageBlocks.toLocaleString()} blocks ago — very new, higher risk`;
+  } else {
+    score = 15;
+    description = `Contract deployed <10K blocks ago — extremely new, exercise caution`;
+  }
+
+  return {
+    name: "Token Age",
+    score: gradeFromScore(score),
+    weight: 2,
+    description,
+  };
+}
+
+function analyzeActivity(holders: HolderData): RiskFactor {
+  const transfers = holders.transferCount ?? 0;
+  const unique = holders.uniqueAddresses ?? 0;
+
+  let score: number;
+  let description: string;
+
+  if (transfers === 0) {
+    score = 10;
+    description = "No transfer activity detected in scanned range";
+  } else if (transfers > 5000 && unique > 500) {
+    score = 95;
+    description = `${transfers.toLocaleString()} transfers across ${unique.toLocaleString()} unique addresses — highly active`;
+  } else if (transfers > 1000 && unique > 100) {
+    score = 80;
+    description = `${transfers.toLocaleString()} transfers across ${unique.toLocaleString()} unique addresses — active`;
+  } else if (transfers > 200 && unique > 30) {
+    score = 60;
+    description = `${transfers.toLocaleString()} transfers across ${unique.toLocaleString()} unique addresses — moderate activity`;
+  } else if (transfers > 20) {
+    score = 40;
+    description = `${transfers.toLocaleString()} transfers across ${unique.toLocaleString()} unique addresses — low activity`;
+  } else {
+    score = 20;
+    description = `Only ${transfers} transfers detected — minimal activity, potentially abandoned or very new`;
+  }
+
+  return {
+    name: "Transfer Activity",
+    score: gradeFromScore(score),
+    weight: 1,
+    description,
+  };
+}
+
 const OG_EXPLORER_BASE = "https://explorer.opengradient.ai/tx";
 
 export function buildAnalysis(
@@ -69,13 +141,14 @@ export function buildAnalysis(
   holders: HolderData,
   liquidity: LiquidityData,
   contract: ContractData,
-  isMock: boolean,
   settlementHash?: string | null,
 ): AnalysisResult {
   const factors: RiskFactor[] = [
     analyzeContract(contract),
     analyzeHolders(holders),
     analyzeLiquidity(liquidity),
+    analyzeTokenAge(contract),
+    analyzeActivity(holders),
   ];
 
   const grade = averageGrade(factors);
@@ -100,7 +173,6 @@ export function buildAnalysis(
       provider: "opengradient-tee",
       settlementHash: settlementHash ?? null,
       explorerUrl: settlementHash ? `${OG_EXPLORER_BASE}/${settlementHash}` : null,
-      isMock,
     },
     analyzedAt: new Date().toISOString(),
   };

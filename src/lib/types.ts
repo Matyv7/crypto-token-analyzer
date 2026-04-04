@@ -23,6 +23,8 @@ export type HolderData = {
   }>;
   totalHolders?: number;
   concentrationRisk: "low" | "medium" | "high";
+  transferCount?: number;
+  uniqueAddresses?: number;
 };
 
 export type LiquidityData = {
@@ -38,6 +40,7 @@ export type ContractData = {
   hasMintFunction: boolean;
   hasBlacklist: boolean;
   ownershipRenounced: boolean;
+  estimatedAgeBlocks?: number;
 };
 
 export type AnalysisResult = {
@@ -52,7 +55,6 @@ export type AnalysisResult = {
     provider: "opengradient-tee";
     settlementHash: string | null;
     explorerUrl: string | null;
-    isMock: boolean;
   };
   analyzedAt: string;
 };
